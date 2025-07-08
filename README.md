@@ -1,4 +1,4 @@
-# CloudflareSpeedTest + DNSPod规则 自动测速更新脚本
+# 建立自己的Cloudflare优选IP DDNS域名
 
 一个基于 Bash 的一键式工具：  
 - 调用 [CloudflareSpeedTest](https://github.com/XIU2/CloudflareSpeedTest) 自动测速  
