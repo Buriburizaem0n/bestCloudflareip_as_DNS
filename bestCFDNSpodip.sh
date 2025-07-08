@@ -41,7 +41,22 @@ EOF
 }
 
 function load_config() {
-    eval $(awk '/: /{gsub(/: /,"=");print}' "$CONFIG_FILE")
+  # 确保文件存在
+  [ -f "$CONFIG_FILE" ] || return 1
+
+  while IFS=: read -r key value; do
+    # 跳过空行或注释
+    [[ -z "$key" || "${key:0:1}" == "#" ]] && continue
+
+    # 去掉 key 尾部空格
+    key="${key%%[[:space:]]}"
+    # 去掉 value 前导空格
+    value="${value#"${value%%[![:space:]]*}"}"
+
+    # 全局声明这个变量
+    # Bash 4+ 支持 declare -g
+    declare -g "${key}"="${value}"
+  done < "$CONFIG_FILE"
 }
 
 function create_config() {
