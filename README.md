@@ -1,0 +1,2 @@
+# bestCloudflareip_as_DNS
+自己的实时更新CF优选ip域名
