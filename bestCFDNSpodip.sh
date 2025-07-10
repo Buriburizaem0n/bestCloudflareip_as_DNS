@@ -6,7 +6,6 @@ SCRIPT_PATH="$(realpath "$0")"
 # 如果传入 --auto，则只负责安装 crontab，然后退出
 if [ "$1" = "--auto" ]; then
   cron_entry="*/15 * * * * $SCRIPT_PATH"
-  # 如果 crontab 中还没有这条，则追加
   ( crontab -l 2>/dev/null | grep -Fxq "$cron_entry" ) || \
     ( crontab -l 2>/dev/null; echo "$cron_entry" ) | crontab -
   echo "✅ 已将脚本添加到 crontab，每 15 分钟运行一次："
@@ -14,21 +13,45 @@ if [ "$1" = "--auto" ]; then
   exit 0
 fi
 
-function print_rainbow() {
-  # 定义一组 ANSI 彩虹色码（红、黄、绿、青、蓝、洋红）
-  colors=(31 33 32 36 34 35)
+# 用于检测并自动更新 CloudflareSpeedTest 工具
+GITHUB_API="https://api.github.com/repos/XIU2/CloudflareSpeedTest/releases/latest"
+function check_update_cf_tool() {
+  local version_file="$CF_DIR/VERSION"
+  # 获取最新版本号
+  latest_version=$(curl -s "$GITHUB_API" | grep '"tag_name":' | sed -E 's/.*"([^\"]+)".*/\1/')
+  # 读取本地版本号
+  if [ -f "$version_file" ]; then
+    local_version=$(<"$version_file")
+  else
+    local_version=""
+  fi
+  # 比较版本
+  if [ "$latest_version" != "$local_version" ]; then
+    echo "[$(date '+%F %T')] ▶ 检测到 CloudflareSpeedTest 新版本: $latest_version，正在更新…"
+    # 下载并解压最新版本
+    tarball="CloudflareST_linux_${cpu_arch}.tar.gz"
+    download_url="https://github.com/XIU2/CloudflareSpeedTest/releases/download/${latest_version}/${tarball}"
+    (wget -q -N "$download_url" -P "$CF_DIR") || \
+      wget -q -N "https://ghfast.top/$download_url" -P "$CF_DIR"
+    tar -xzf "$CF_DIR/$tarball" -C "$CF_DIR"
+    chmod +x "$CF_DIR/CloudflareST"
+    rm -f "$CF_DIR/$tarball"
+    echo "$latest_version" > "$version_file"
+    echo "[$(date '+%F %T')] ✅ 更新完成"
+  else
+    echo "[$(date '+%F %T')] ➡️ CloudflareSpeedTest 已是最新版本: $local_version"
+  fi
+}
 
-  # 逐行读取 ASCII 艺术，然后逐字符输出，不断循环颜色
+function print_rainbow() {
+  colors=(31 33 32 36 34 35)
   while IFS= read -r line; do
     for ((j=0; j<${#line}; j++)); do
-      # 计算当前字符的颜色索引
       color=${colors[$((j % ${#colors[@]}))]}
-      # 打印带颜色的单个字符
       printf "\033[${color}m%s" "${line:j:1}"
     done
-    # 换行并重置颜色
     printf "\033[0m\n"
-done << 'EOF'
+  done << 'EOF'
  ____                       __
 /\  _`\                  __/\ \                     __
 \ \ \L\ \  __  __  _ __ /\_\ \ \____  __  __  _ __ /\_\
@@ -41,26 +64,16 @@ EOF
 }
 
 function load_config() {
-  # 确保文件存在
   [ -f "$CONFIG_FILE" ] || return 1
-
   while IFS=: read -r key value; do
-    # 跳过空行或注释
     [[ -z "$key" || "${key:0:1}" == "#" ]] && continue
-
-    # 去掉 key 尾部空格
     key="${key%%[[:space:]]}"
-    # 去掉 value 前导空格
     value="${value#"${value%%[![:space:]]*}"}"
-
-    # 全局声明这个变量
-    # Bash 4+ 支持 declare -g
     declare -g "${key}"="${value}"
   done < "$CONFIG_FILE"
 }
 
 function create_config() {
-    # 提供CPU架构选择
     PS3='请选择你的CPU架构 (默认: Linux x86_64 64位): '
     options=(
         "Linux x86 32位"
@@ -74,13 +87,11 @@ function create_config() {
         "Linux Mipsle 32位"
         "Linux Mipsle 64位"
     )
-
-    # 交互式选择CPU架构
     echo "可选CPU架构："
     for i in "${!options[@]}"; do
       printf "  %d) %s\n" $((i+1)) "${options[i]}"
     done
-    read -p "请输入CPU架构编号（默认: Linux x86_64 64位）: " choice
+    read -p "请输入CPU架构编号（默认: 2）: " choice
     choice=${choice:-2}
     if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#options[@]} )); then
       echo "无效输入，已使用默认CPU架构。"
@@ -89,36 +100,26 @@ function create_config() {
     cpu_arch="${options[choice-1]}"
     echo "已选择CPU架构：$cpu_arch"
 
-    # 交互式填写信息
-    echo "密钥请前往官网控制台 https://console.cloud.tencent.com/cam/capi 进行获取"
     read -p "请输入腾讯云SecretId: " secret_id
     read -p "请输入腾讯云SecretKey: " secret_key
     read -p "请输入域名 (例如 example.com): " Domain
-    read -p "请输入主机记录（例如 www，默认: @）: " SubDomain
+    read -p "请输入主机记录（默认: @）: " SubDomain
     SubDomain=${SubDomain:-"@"}
 
-    # 定义选项数组
     options=(默认 电信 联通 移动 教育网 海外 其他)
-    # 打印选项
     echo "可选线路："
     for i in "${!options[@]}"; do
       printf "  %d) %s\n" $((i+1)) "${options[i]}"
     done
-    # 读用户输入，提示中写上默认值 [1]
     read -p "请输入线路编号（默认: 1）: " choice
-    # 回车或输入空串时，设为默认 1
     choice=${choice:-1}
-    # 如果用户输入了非数字，或超出范围，则提示并改回默认
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] \
-      || (( choice < 1 || choice > ${#options[@]} )); then
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#options[@]} )); then
       echo "无效输入，已使用默认线路。"
       choice=1
     fi
-    # 映射到选项文字
     RecordLine="${options[choice-1]}"
     echo "已选择线路：$RecordLine"
 
-    # 写入配置到YAML
     cat > "$CONFIG_FILE" <<EOF
 cpu_arch: $cpu_arch
 secret_id: $secret_id
@@ -129,7 +130,7 @@ RecordLine: $RecordLine
 EOF
 }
 
-# 命令行参数处理
+# 参数处理
 if [ "$1" == "--config" ]; then
     print_rainbow
     create_config
@@ -140,24 +141,15 @@ else
     create_config
 fi
 
-# 获取CloudflareSpeedTest工具
+# 设置工具目录并检查/更新 CloudflareSpeedTest
 CF_DIR="$HOME/CloudflareST"
 CF_TOOL="$CF_DIR/CloudflareST"
 CF_CSV="$CF_DIR/result.csv"
+mkdir -p "$CF_DIR"
+cd "$CF_DIR"
+check_update_cf_tool
 
-if [ ! -d "$CF_DIR" ]; then
-    echo "[$(date '+%F %T')] ▶ 正在下载CloudflareSpeedTest工具…"
-    mkdir "$CF_DIR" && cd "$CF_DIR"
-    wget -N "https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.0/CloudflareST_linux_$cpu_arch.tar.gz" || \
-    wget -N "https://ghfast.top/https://github.com/XIU2/CloudflareSpeedTest/releases/download/v2.3.0/CloudflareST_linux_$cpu_arch.tar.gz"
-    tar -xzf "CloudflareST_linux_$cpu_arch.tar.gz"
-    rm "CloudflareST_linux_$cpu_arch.tar.gz"
-    chmod +x CloudflareST
-else
-    echo "[$(date '+%F %T')] ▶ CloudflareSpeedTest工具已存在，跳过下载。"
-fi
-
-# 测速并获取最快IP
+# 运行测速并更新记录
 cd "$CF_DIR"
 echo "[$(date '+%F %T')] ▶ 测速中…"
 "$CF_TOOL"
